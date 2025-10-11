@@ -61,6 +61,7 @@ async def check_prices():
         current_price = data["Close"].iloc[-1]
         print(f"Checking {symbol}: {current_price} vs {target}")
         if current_price >= target:
+            # Send message to all chats that have used the bot (you might want to save chat_ids in persistent storage)
             for chat in app.chat_data.keys():
                 await app.bot.send_message(
                     chat_id=chat,
@@ -78,20 +79,19 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("add", add))
 app.add_handler(CommandHandler("list", list_alerts))
 
-# --- Thread to run the Telegram bot ---
-def run_bot():
-    print("🤖 Stock Alert Bot polling started...")
-    app.run_polling()
+# --- Run Flask in background thread ---
+def run_flask():
+    port = int(os.environ.get("PORT", 5000))
+    print(f"🌐 Flask server running on port {port}")
+    web_app.run(host='0.0.0.0', port=port)
 
 # --- Main ---
 if __name__ == '__main__':
-    try:
-        bot_thread = threading.Thread(target=run_bot)
-        bot_thread.daemon = True
-        bot_thread.start()
+    # Start Flask app in background thread
+    flask_thread = threading.Thread(target=run_flask)
+    flask_thread.daemon = True
+    flask_thread.start()
 
-        port = int(os.environ.get("PORT", 5000))
-        print(f"🌐 Flask server running on port {port}")
-        web_app.run(host='0.0.0.0', port=port)
-    except Exception as e:
-        print(f"❌ Error starting app: {e}")
+    # Run Telegram bot in main thread (this must NOT be in a thread)
+    print("🤖 Stock Alert Bot polling started...")
+    app.run_polling()
