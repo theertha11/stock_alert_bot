@@ -16,12 +16,14 @@ def home():
 
 # --- Global Storage ---
 watchlist = {}  # Example: {'TCS.NS': 4200.0}
+chat_ids = set()  # Track users to notify
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
 # --- Command: /start ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_ids.add(update.effective_chat.id)
     await update.message.reply_text(
         "📈 Welcome to Stock Alert Bot!\n\n"
         "Use /add <symbol> <price> to set an alert.\n"
@@ -35,6 +37,7 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         symbol = context.args[0].upper()
         price = float(context.args[1])
         watchlist[symbol] = price
+        chat_ids.add(update.effective_chat.id)
         await update.message.reply_text(f"✅ Added alert: {symbol} → ₹{price}")
     except (IndexError, ValueError):
         await update.message.reply_text("⚠️ Usage: /add SYMBOL PRICE\nExample: /add INFY.NS 1600")
@@ -61,17 +64,29 @@ async def check_prices():
         current_price = data["Close"].iloc[-1]
         print(f"Checking {symbol}: {current_price} vs {target}")
         if current_price >= target:
-            # Send message to all chats that have used the bot (you might want to save chat_ids in persistent storage)
-            for chat in app.chat_data.keys():
-                await app.bot.send_message(
-                    chat_id=chat,
-                    text=f"🚨 {symbol} reached ₹{current_price:.2f} (Target ₹{target})"
-                )
+            for chat_id in chat_ids:
+                try:
+                    await app.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"🚨 {symbol} reached ₹{current_price:.2f} (Target ₹{target})"
+                    )
+                except Exception as e:
+                    print(f"Failed to send message to chat {chat_id}: {e}")
             del watchlist[symbol]
 
 # --- Scheduler Setup ---
 scheduler = BackgroundScheduler()
-scheduler.add_job(lambda: asyncio.run(check_prices()), 'interval', minutes=2)
+
+# This function will be run by the scheduler every 2 minutes
+def schedule_check_prices():
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    asyncio.run_coroutine_threadsafe(check_prices(), loop)
+
+scheduler.add_job(schedule_check_prices, 'interval', minutes=2)
 scheduler.start()
 
 # --- Register Commands ---
@@ -92,6 +107,6 @@ if __name__ == '__main__':
     flask_thread.daemon = True
     flask_thread.start()
 
-    # Run Telegram bot in main thread (this must NOT be in a thread)
+    # Run Telegram bot in main thread
     print("🤖 Stock Alert Bot polling started...")
     app.run_polling()
