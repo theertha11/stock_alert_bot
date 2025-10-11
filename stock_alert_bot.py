@@ -1,6 +1,5 @@
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-from apscheduler.schedulers.background import BackgroundScheduler
 import yfinance as yf
 import asyncio
 import os
@@ -69,10 +68,14 @@ async def check_prices():
                 )
             del watchlist[symbol]
 
-# --- Scheduler Setup ---
-scheduler = BackgroundScheduler()
-scheduler.add_job(lambda: asyncio.run(check_prices()), 'interval', minutes=2)
-scheduler.start()
+# --- Periodic Price Check Coroutine ---
+async def periodic_check_prices():
+    while True:
+        try:
+            await check_prices()
+        except Exception as e:
+            print(f"Error in price check: {e}")
+        await asyncio.sleep(120)  # wait 2 minutes between checks
 
 # --- Register Commands ---
 app.add_handler(CommandHandler("start", start))
@@ -92,6 +95,13 @@ if __name__ == '__main__':
     flask_thread.daemon = True
     flask_thread.start()
 
-    # Run Telegram bot in main thread (this must NOT be in a thread)
-    print("🤖 Stock Alert Bot polling started...")
-    app.run_polling()
+    # Run Telegram bot and periodic check in main thread event loop
+    async def main():
+        print("🤖 Stock Alert Bot polling started...")
+        # Start periodic price checks concurrently
+        asyncio.create_task(periodic_check_prices())
+        # Start the bot (this will block until stopped)
+        await app.run_polling()
+
+    # Run the async main function
+    asyncio.run(main())
