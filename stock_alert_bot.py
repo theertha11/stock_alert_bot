@@ -61,17 +61,26 @@ async def check_prices():
         current_price = data["Close"].iloc[-1]
         print(f"Checking {symbol}: {current_price} vs {target}")
         if current_price >= target:
-            # Send message to all chats that have used the bot (you might want to save chat_ids in persistent storage)
-            for chat in app.chat_data.keys():
-                await app.bot.send_message(
-                    chat_id=chat,
-                    text=f"🚨 {symbol} reached ₹{current_price:.2f} (Target ₹{target})"
-                )
+            # Send message to all chats that have used the bot
+            for chat_id in list(app.chat_data.keys()):
+                try:
+                    await app.bot.send_message(
+                        chat_id=chat_id,
+                        text=f"🚨 {symbol} reached ₹{current_price:.2f} (Target ₹{target})"
+                    )
+                except Exception as e:
+                    print(f"Failed to send message to chat {chat_id}: {e}")
             del watchlist[symbol]
 
 # --- Scheduler Setup ---
 scheduler = BackgroundScheduler()
-scheduler.add_job(lambda: asyncio.run(check_prices()), 'interval', minutes=2)
+
+def schedule_check_prices():
+    # Schedule the async function safely on the running loop
+    loop = asyncio.get_event_loop()
+    loop.create_task(check_prices())
+
+scheduler.add_job(schedule_check_prices, 'interval', minutes=2)
 scheduler.start()
 
 # --- Register Commands ---
