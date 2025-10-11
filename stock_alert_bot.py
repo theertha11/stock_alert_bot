@@ -1,107 +1,63 @@
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
-import yfinance as yf
 import asyncio
+from flask import Flask, request
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 import os
-import threading
-from flask import Flask
 
-# --- Flask App to bind a port (for Render) ---
-web_app = Flask(__name__)
+TOKEN = os.getenv("BOT_TOKEN")
 
-@web_app.route('/')
-def home():
-    return "🟢 Stock Alert Bot is running on Render!"
+if not TOKEN:
+    raise ValueError("No bot token provided! Please set BOT_TOKEN environment variable.")
 
-# --- Global Storage ---
-watchlist = {}  # Example: {'TCS.NS': 4200.0}
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-app = ApplicationBuilder().token(BOT_TOKEN).build()
+app = Flask(__name__)
+telegram_app = None  # This will hold the Telegram Application instance
 
-# --- Command: /start ---
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📈 Welcome to Stock Alert Bot!\n\n"
-        "Use /add <symbol> <price> to set an alert.\n"
-        "Example: /add TCS.NS 4200\n\n"
-        "I’ll notify you when it reaches that price!"
-    )
+# Telegram command handler example
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text("Hello! I'm your stock alert bot.")
 
-# --- Command: /add ---
-async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        symbol = context.args[0].upper()
-        price = float(context.args[1])
-        watchlist[symbol] = price
-        await update.message.reply_text(f"✅ Added alert: {symbol} → ₹{price}")
-    except (IndexError, ValueError):
-        await update.message.reply_text("⚠️ Usage: /add SYMBOL PRICE\nExample: /add INFY.NS 1600")
+# Flask route for basic health check or webhook (optional)
+@app.route("/")
+def index():
+    return "Stock Alert Bot is running!"
 
-# --- Command: /list ---
-async def list_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not watchlist:
-        await update.message.reply_text("🕸️ No active alerts yet.")
-        return
-    msg = "🔔 Active Alerts:\n"
-    for sym, val in watchlist.items():
-        msg += f"• {sym} → ₹{val}\n"
-    await update.message.reply_text(msg)
+# If you want to support webhooks instead of polling, set up Flask route like this:
+@app.route(f"/webhook/{TOKEN}", methods=["POST"])
+async def telegram_webhook():
+    data = await request.get_json()
+    update = Update.de_json(data, telegram_app.bot)
+    await telegram_app.update_queue.put(update)
+    return "OK"
 
-# --- Price Check Logic ---
-async def check_prices():
-    for symbol, target in list(watchlist.items()):
-        await asyncio.sleep(2)  # delay to avoid rate-limit
-        ticker = yf.Ticker(symbol)
-        data = ticker.history(period="1d")
-        if data.empty:
-            print(f"{symbol}: No data found, possibly delisted.")
-            continue
-        current_price = data["Close"].iloc[-1]
-        print(f"Checking {symbol}: {current_price} vs {target}")
-        if current_price >= target:
-            # Send message to all chats that have used the bot (you might want to save chat_ids in persistent storage)
-            for chat in app.chat_data.keys():
-                await app.bot.send_message(
-                    chat_id=chat,
-                    text=f"🚨 {symbol} reached ₹{current_price:.2f} (Target ₹{target})"
-                )
-            del watchlist[symbol]
+async def main():
+    global telegram_app
 
-# --- Periodic Price Check Coroutine ---
-async def periodic_check_prices():
-    while True:
-        try:
-            await check_prices()
-        except Exception as e:
-            print(f"Error in price check: {e}")
-        await asyncio.sleep(120)  # wait 2 minutes between checks
+    # Create the Telegram Application (bot)
+    telegram_app = Application.builder().token(TOKEN).build()
 
-# --- Register Commands ---
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("add", add))
-app.add_handler(CommandHandler("list", list_alerts))
+    # Register command handlers
+    telegram_app.add_handler(CommandHandler("start", start))
 
-# --- Run Flask in background thread ---
-def run_flask():
-    port = int(os.environ.get("PORT", 5000))
-    print(f"🌐 Flask server running on port {port}")
-    web_app.run(host='0.0.0.0', port=port)
+    # Run polling in a background task
+    polling_task = asyncio.create_task(telegram_app.run_polling())
 
-# --- Main ---
-if __name__ == '__main__':
-    # Start Flask app in background thread
-    flask_thread = threading.Thread(target=run_flask)
-    flask_thread.daemon = True
+    # Run Flask in an executor (since Flask is sync by default)
+    loop = asyncio.get_event_loop()
+    from threading import Thread
+
+    def run_flask():
+        app.run(host="0.0.0.0", port=10000)
+
+    flask_thread = Thread(target=run_flask, daemon=True)
     flask_thread.start()
 
-    # Run Telegram bot and periodic check in main thread event loop
-    async def main():
-        print("🤖 Stock Alert Bot polling started...")
-        # Start periodic price checks concurrently
-        asyncio.create_task(periodic_check_prices())
-        # Start the bot (this will block until stopped)
-        await app.run_polling()
+    # Wait for the polling to finish (never, unless interrupted)
+    await polling_task
 
-    # Run the async main function
-    asyncio.run(main())
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except RuntimeError as e:
+        # This can happen if event loop is already running, e.g., in Jupyter
+        print(f"Runtime error: {e}")
