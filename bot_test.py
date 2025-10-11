@@ -1,23 +1,37 @@
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+
+# Define a simple command
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    #await update.message.reply_text("Hello! I'm your bot 👋")
+    await update.message.reply_text("I'm not your Bot. Now Fuck off..! 👋")
+
+# Main entry
+app = ApplicationBuilder().token("8286321526:AAHV5f8RKBq-oDGPK2BQkAucueBRbPfp1WI").build()
+
+app.add_handler(CommandHandler("start", start))
+
+print("Bot running...")
+app.run_polling()
+
+
+
+#-------------------------------------------------------------------------------------#
+#The code which failed the first deployment, before binding to a port
+
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
 import yfinance as yf
 import asyncio
 import os
-import threading
-from flask import Flask
 
-# --- Flask App to bind a port (for Render) ---
-web_app = Flask(__name__)
+# --- Global Storage for Simplicity ---
+watchlist = {} # Example: {'TCS.NS': 4200.0}
 
-@web_app.route('/')
-def home():
-    return "🟢 Stock Alert Bot is running on Render!"
-
-# --- Global Storage ---
-watchlist = {}  # Example: {'TCS.NS': 4200.0}
-
+#BOT_TOKEN = "8286321526:AAHV5f8RKBq-oDGPK2BQkAucueBRbPfp1WI"
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
 # --- Command: /start ---
@@ -52,7 +66,7 @@ async def list_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Price Check Logic ---
 async def check_prices():
     for symbol, target in list(watchlist.items()):
-        await asyncio.sleep(2)  # delay to avoid rate-limit
+        await asyncio.sleep(2) # 2-second delay to avoid rate-limit
         ticker = yf.Ticker(symbol)
         data = ticker.history(period="1d")
         if data.empty:
@@ -66,7 +80,7 @@ async def check_prices():
                     chat_id=chat,
                     text=f"🚨 {symbol} reached ₹{current_price:.2f} (Target ₹{target})"
                 )
-            del watchlist[symbol]
+            del watchlist[symbol] # Remove after alert
 
 # --- Scheduler Setup ---
 scheduler = BackgroundScheduler()
@@ -78,20 +92,5 @@ app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("add", add))
 app.add_handler(CommandHandler("list", list_alerts))
 
-# --- Thread to run the Telegram bot ---
-def run_bot():
-    print("🤖 Stock Alert Bot polling started...")
-    app.run_polling()
-
-# --- Main ---
-if __name__ == '__main__':
-    try:
-        bot_thread = threading.Thread(target=run_bot)
-        bot_thread.daemon = True
-        bot_thread.start()
-
-        port = int(os.environ.get("PORT", 5000))
-        print(f"🌐 Flask server running on port {port}")
-        web_app.run(host='0.0.0.0', port=port)
-    except Exception as e:
-        print(f"❌ Error starting app: {e}")
+print("🤖 Stock Alert Bot running...")
+app.run_polling()
