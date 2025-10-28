@@ -105,11 +105,10 @@ scheduler = BackgroundScheduler()
 
 def schedule_check_prices():
     try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-    asyncio.run_coroutine_threadsafe(check_prices(), loop)
+        asyncio.run_coroutine_threadsafe(check_prices(), app.loop)
+    except Exception as e:
+        logging.exception(f"Scheduler failed to run check_prices: {e}")
+
 
 scheduler.add_job(schedule_check_prices, 'interval', minutes=2)
 scheduler.start()
