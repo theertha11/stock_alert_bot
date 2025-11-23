@@ -11,7 +11,7 @@ import logging
 # --- Logging setup (important for cron stability) ---
 logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
-    level=logging.INFO
+    level=logging.ERROR
 )
 
 # --- Flask App to bind a port (for Render) ---
@@ -21,8 +21,13 @@ web_app = Flask(__name__)
 def home():
     return "🟢 Stock Alert Bot is running on Render!"
 
-# --- Global Storage ---
-watchlist = {} # Example: {'TCS.NS': ('>=', 4200.0)}
+# Example:
+# watchlist = {
+#   chat_id1: [("TCS.NS", ">=", 4200), ("INFY.NS", "<=", 1500)],
+#   chat_id2: [("RELIANCE.NS", ">=", 3000)]
+# }
+watchlist = {}
+
 chat_ids = set() # Track users to notify
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -41,6 +46,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- /add command ---
 async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
+        chat_id = update.effective_chat.id
         symbol = context.args[0].upper()
         operator = context.args[1]
         price = float(context.args[2])
@@ -48,38 +54,68 @@ async def add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if operator not in [">=", "<="]:
             raise ValueError("Invalid operator")
 
-        watchlist[symbol] = (operator, price)
-        chat_ids.add(update.effective_chat.id)
-        await update.message.reply_text(f"✅ Added alert: {symbol} {operator} ₹{price}")
+        if chat_id not in watchlist:
+            watchlist[chat_id] = []
+
+        watchlist[chat_id].append((symbol, operator, price))
+        chat_ids.add(chat_id)
+
+        await update.message.reply_text(
+            f"✅ Alert added:\n{symbol} {operator} ₹{price}"
+        )
 
     except (IndexError, ValueError):
         await update.message.reply_text(
             "⚠️ Usage: /add SYMBOL >= PRICE\nExample: /add INFY.NS <= 1600"
         )
 
+
 # --- /list command ---
 async def list_alerts(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not watchlist:
-        await update.message.reply_text("🕸️ No active alerts yet.")
+    chat_id = update.effective_chat.id
+
+    if chat_id not in watchlist or not watchlist[chat_id]:
+        await update.message.reply_text("🕸️ No alerts found.")
         return
-    msg = "🔔 Active Alerts:\n"
-    for sym, (op, val) in watchlist.items():
-        msg += f"• {sym} {op} ₹{val}\n"
+
+    msg = "🔔 Your Alerts:\n"
+    for symbol, op, price in watchlist[chat_id]:
+        msg += f"• {symbol} {op} ₹{price}\n"
+
     await update.message.reply_text(msg)
+
 
 # --- Price check logic ---
 async def check_prices():
     logging.info("Running scheduled stock check...")
-    for symbol, (operator, target) in list(watchlist.items()):
+
+    # gather all unique symbols to avoid redundant API calls
+    symbols = set()
+    for alerts in watchlist.values():
+        for sym, _, _ in alerts:
+            symbols.add(sym)
+
+    prices = {}
+
+    # fetch prices once per symbol
+    for symbol in symbols:
         try:
-            await asyncio.sleep(2) # avoid rate-limit
+            await asyncio.sleep(2)
             ticker = yf.Ticker(symbol)
             data = ticker.history(period="1d")
-            if data.empty:
-                logging.warning(f"{symbol}: No data found.")
+            if not data.empty:
+                prices[symbol] = data["Close"].iloc[-1]
+        except:
+            pass
+
+    # check per-user alerts
+    for chat_id, alerts in list(watchlist.items()):
+        new_alerts = []
+        for symbol, operator, target in alerts:
+            if symbol not in prices:
                 continue
-            current_price = data["Close"].iloc[-1]
-            logging.info(f"Checking {symbol}: {current_price} vs {operator} {target}")
+
+            current_price = prices[symbol]
 
             alert_condition = (
                 (operator == ">=" and current_price >= target) or
@@ -87,18 +123,20 @@ async def check_prices():
             )
 
             if alert_condition:
-                for chat_id in chat_ids:
-                    try:
-                        await app.bot.send_message(
-                            chat_id=chat_id,
-                            text=f"🚨 {symbol} reached ₹{current_price:.2f} ({operator} {target})"
+                try:
+                    await app.bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            f"🚨 {symbol} reached ₹{current_price:.2f} "
+                            f"({operator} {target})"
                         )
-                    except Exception as e:
-                        logging.error(f"Failed to send message to chat {chat_id}: {e}")
-                del watchlist[symbol]
+                    )
+                except:
+                    pass
+            else:
+                new_alerts.append((symbol, operator, target))
 
-        except Exception as e:
-            logging.exception(f"Error while checking {symbol}: {e}")
+        watchlist[chat_id] = new_alerts
 
 # --- Scheduler Setup ---
 scheduler = BackgroundScheduler()
